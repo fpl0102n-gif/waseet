@@ -1,0 +1,72 @@
+name: Deploy Supabase Edge Function (telegram-webhook)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Set function secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_ALLOW_ALL: ${{ secrets.TELEGRAM_ALLOW_ALL }}
+        run: |
+          missing=0
+          for v in TELEGRAM_BOT_TOKEN TELEGRAM_ADMIN_CHAT_ID SUPABASE_SERVICE_ROLE_KEY TELEGRAM_WEBHOOK_SECRET SUPABASE_PROJECT_REF; do
+            eval "val=\${$v}"
+            if [ -z "$val" ]; then
+              echo "::warning title=Missing Secret::Secret $v not set - skipping secrets upload"
+              missing=1
+            fi
+          done
+          if [ $missing -eq 0 ]; then
+            extra=""
+            if [ -n "$TELEGRAM_ALLOW_ALL" ]; then
+              extra="$extra TELEGRAM_ALLOW_ALL=$TELEGRAM_ALLOW_ALL"
+            fi
+            supabase secrets set \
+              TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+              TELEGRAM_ADMIN_CHAT_ID="$TELEGRAM_ADMIN_CHAT_ID" \
+              SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+              TELEGRAM_WEBHOOK_SECRET="$TELEGRAM_WEBHOOK_SECRET" \
+              $extra \
+              --project-ref "$SUPABASE_PROJECT_REF"
+          fi
+
+      - name: Deploy telegram-webhook
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy telegram-webhook --project-ref ${{ secrets.SUPABASE_PROJECT_REF }} --no-verify-jwt
+
+      - name: Refresh Telegram webhook
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_WEBHOOK_SECRET" ] && [ -n "$SUPABASE_PROJECT_REF" ]; then
+            curl -sS -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+              -H "Content-Type: application/json" \
+              -d "{\"url\":\"https://${SUPABASE_PROJECT_REF}.functions.supabase.co/telegram-webhook/${TELEGRAM_WEBHOOK_SECRET}\"}" || echo "::error title=Webhook::Failed to call setWebhook"
+          else
+            echo "::notice title=Webhook Skipped::Missing token or secret; not refreshing webhook"
+          fi

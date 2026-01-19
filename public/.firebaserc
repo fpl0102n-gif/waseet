@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "waseet-07",
+    "waseet": "waseet-07"
+  },
+  "targets": {},
+  "etags": {}
+}
